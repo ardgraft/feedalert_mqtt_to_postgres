@@ -155,7 +155,7 @@ def write_to_database():
                     if device_type == "old":
                         cur.execute("SELECT swd_imei FROM things WHERE swd_imei = %s", (message[1],))
                     else:
-                        cur.execute("SELECT swd_imei FROM things WHERE imei = %s", (message[1],))
+                        cur.execute("SELECT imei FROM things WHERE imei = %s", (message[1],))
                     
                     cur.fetchone()
                     
@@ -167,11 +167,15 @@ def write_to_database():
                         cur.execute(q)
 
                     else:
-                        if device_type == "old":
-                            q = "INSERT INTO things (swd_imei, " + topic + "," + "lastupdated) VALUES ('" + message[1] +"', '" + message[3] + "', NOW())"
+                        strings_to_check = ["connect", "connection", "disconnect", "location", "mqttstats"]
+                        if any(s in topic for s in strings_to_check):
+                            xxx=1
                         else:
-                            q = "INSERT INTO things (imei, " + topic + "," + "lastupdated) VALUES ('" + message[1] +"', '" + message[3] + "', NOW())"
-                        cur.execute(q)
+                            if device_type == "old":
+                                q = "INSERT INTO things (swd_imei, " + topic + "," + "lastupdated) VALUES ('" + message[1] +"', '" + message[3] + "', NOW())"
+                            else:
+                                q = "INSERT INTO things (imei, " + topic + "," + "lastupdated) VALUES ('" + message[1] +"', '" + message[3] + "', NOW())"
+                            cur.execute(q)
 
                 except errors.UndefinedColumn as e:
                         conn.rollback()
@@ -183,6 +187,7 @@ def write_to_database():
                 
                 except Exception as e:
                     raise
+                    exit(1)
                     # Handle unique constraint violations separately
                     
             conn.commit()
@@ -212,32 +217,6 @@ def opendatabase():
             exit(1)
     return conn
 
-# def publisher_thread():
-#     global conn, telit
-#     cur = conn.cursor()
-    
-#     while True:
-#         q = "SELECT swd_imei FROM things WHERE swd_publishdebug is NULL limit 1"
-#         cur.execute(q)
-#         row = cur.fetchall()
-
-#         for r in row:
-#             telit.setThingAttr(r[0], "swd_publishdebug", "1")
-#             logger.info(f"Setting swd_publishdebug to 1 for {r[0]}")
-#             time.sleep(5)
-        
-#         time.sleep(360)
-        
-#         q = "SELECT swd_imei FROM things WHERE swd_publishattributes is NULL limit 1"
-#         cur.execute(q)
-#         row = cur.fetchall()
-
-#         for r in row:
-#             telit.setThingAttr(r[0], "swd_publishattributes", "1")
-#             logger.info(f"Setting swd_publishaatributes to 1 for {r[0]}")
-#             time.sleep(5)
-            
-#         time.sleep(360)
 
 if __name__ == "__main__":
     
@@ -251,15 +230,13 @@ if __name__ == "__main__":
 
     # Connect to the MQTT broker
     logger.info("Setting up MQTT parameters")
-    client = mqtt.Client()
+    cid = os.environ.get('MQTT_CLIENT_ID') + "-" + str(uuid.uuid4().hex)[:8]
+    client = mqtt.Client(client_id=cid, clean_session=True)
     client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
     client.on_connect = on_connect
     client.on_message = on_message
     client.on_disconnect = on_disconnect
     
-    # thread = threading.Thread(target=publisher_thread)
-    # thread.daemon = True  # This ensures the thread will be killed when the main program exits
-    # thread.start()
     
     
     while True:
