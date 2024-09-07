@@ -44,7 +44,7 @@ MQTT_ENV = os.environ.get("MQTT_ENV")
 BETTERSTACK_TOKEN = os.environ.get("BETTERSTACK_TOKEN")
 SENTRY_DSN=os.environ.get("SENTRY_DSN")
 
-
+# Setup Sentry
 sentry_sdk.init(
     dsn=SENTRY_DSN,
     # Set traces_sample_rate to 1.0 to capture 100%
@@ -54,6 +54,7 @@ sentry_sdk.init(
     # of sampled transactions.
     # We recommend adjusting this value in production.
     profiles_sample_rate=1.0,
+    release="feedalert_mqtt_to_postgresmyapp@1.0.0",
 )
 
 # Create a CRC-32 checksum object
