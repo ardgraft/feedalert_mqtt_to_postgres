@@ -18,16 +18,7 @@ from dotenv import load_dotenv
 from logtail import LogtailHandler
 
 
-sentry_sdk.init(
-    dsn="https://9c2c2d155a406425789565963589ce6b@o471157.ingest.us.sentry.io/4507910628835328",
-    # Set traces_sample_rate to 1.0 to capture 100%
-    # of transactions for tracing.
-    traces_sample_rate=1.0,
-    # Set profiles_sample_rate to 1.0 to profile 100%
-    # of sampled transactions.
-    # We recommend adjusting this value in production.
-    profiles_sample_rate=1.0,
-)
+
 
 # Handle signals for script stop
 def handle_termination_signals(signum, frame):
@@ -51,7 +42,19 @@ MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD")
 MQTT_USERNAME = os.environ.get("MQTT_USERNAME")
 MQTT_ENV = os.environ.get("MQTT_ENV")
 BETTERSTACK_TOKEN = os.environ.get("BETTERSTACK_TOKEN")
+SENTRY_DSN=os.environ.get("SENTRY_DSN")
 
+
+sentry_sdk.init(
+    dsn=SENTRY_DSN,
+    # Set traces_sample_rate to 1.0 to capture 100%
+    # of transactions for tracing.
+    traces_sample_rate=1.0,
+    # Set profiles_sample_rate to 1.0 to profile 100%
+    # of sampled transactions.
+    # We recommend adjusting this value in production.
+    profiles_sample_rate=1.0,
+)
 
 # Create a CRC-32 checksum object
 crc32 = crcmod.predefined.Crc('crc-32')
