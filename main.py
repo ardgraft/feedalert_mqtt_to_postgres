@@ -1,21 +1,43 @@
-import paho.mqtt.client as mqtt
+import os
+import sys
 import uuid
+import queue
+import signal
 import datetime
 import psycopg2
-from psycopg2 import errors
-import queue
-
 import logging
-import time
 import binascii
-import crcmod.predefined
-import os
 import threading
+import sentry_sdk
+import crcmod.predefined
+import paho.mqtt.client as mqtt
+
+from psycopg2 import errors
 from telit import telitHandler
 from dotenv import load_dotenv
-# from pushover import Client
-from logging.handlers import TimedRotatingFileHandler
+from logtail import LogtailHandler
 
+
+sentry_sdk.init(
+    dsn="https://9c2c2d155a406425789565963589ce6b@o471157.ingest.us.sentry.io/4507910628835328",
+    # Set traces_sample_rate to 1.0 to capture 100%
+    # of transactions for tracing.
+    traces_sample_rate=1.0,
+    # Set profiles_sample_rate to 1.0 to profile 100%
+    # of sampled transactions.
+    # We recommend adjusting this value in production.
+    profiles_sample_rate=1.0,
+)
+
+# Handle signals for script stop
+def handle_termination_signals(signum, frame):
+    logger.error(f"Signal received at line {frame.f_lineno} in {frame.f_code.co_filename}")
+    logger.critical(f"Received signal {signum}. Stopping script.")
+    sys.exit(0)
+
+# Trap common stop signals
+signal.signal(signal.SIGINT, handle_termination_signals)  # Handle Ctrl+C
+signal.signal(signal.SIGTERM, handle_termination_signals)  # Handle termination
 
 # Load environment variables from the .env file
 load_dotenv()
@@ -28,42 +50,20 @@ MQTT_CLIENT_ID = os.environ.get("MQTT_CLIENT_ID")
 MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD")
 MQTT_USERNAME = os.environ.get("MQTT_USERNAME")
 MQTT_ENV = os.environ.get("MQTT_ENV")
-PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN")
-PUSHOVER_USER_KEY = os.environ.get("PUSHOVER_USER_KEY")
+BETTERSTACK_TOKEN = os.environ.get("BETTERSTACK_TOKEN")
 
-# push = Client(PUSHOVER_USER_KEY, api_token=PUSHOVER_API_TOKEN)
-# push.send_message("Hello! This is a test message from Python.", title="Test Message")
 
 # Create a CRC-32 checksum object
 crc32 = crcmod.predefined.Crc('crc-32')
 
 
 
-logger = logging.getLogger("MyLogger")
+
+handler = LogtailHandler(source_token=BETTERSTACK_TOKEN)
+logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
-# Create a handler that writes log messages to a file, rotating the log file
-# at a specified interval - for example, at midnight every day
-handler = TimedRotatingFileHandler(
-    "mqtt_to_postgres.log", 
-    when="midnight", 
-    interval=1,
-    backupCount=7  # Keep 7 days of logs
-)
-
-# Define the format for the log entries
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-handler.setFormatter(formatter)
-
-# Add the handler to the logger
+logger.handlers = []
 logger.addHandler(handler)
-
-# Create a handler for logging to the console (screen)
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(formatter)
-
-# Add the console handler to the logger
-logger.addHandler(console_handler)
 
 logger.info("Starting up...")
 
@@ -91,19 +91,20 @@ def on_connect(client, userdata, flags, rc):
         client.subscribe("#")
     else:
         # push.send_message("MQTT connection failed. Retrying...", title="MQTT Connect Failed")
-        logger.warning("Connection failed. Retrying in 5 seconds...")
+        logger.error("Connection failed. Retrying in 5 seconds...")
         
 
 def on_disconnect(client, userdata, rc):
     if rc != 0:
         # push.send_message("MQTT connection lost. Reconnecting...", title="MQTT Connection Lost")
-        logger.warning("Connection lost. Reconnecting...")
+        logger.warning("MQTT connection lost. Reconnecting...")
     
-    print("Disconnected, attempting to reconnect...")
+    logger.warning("MQTT disconnected, attempting to reconnect...")
     try:
         client.reconnect()
     except Exception as e:
-        print(f"Reconnect failed: {e}")
+        logger.critical("Disconnected, unable to reconnect. Failing. Error message: %s", str(e))
+        exit()
 
 def on_message(client, userdata, msg):
     try:
@@ -120,9 +121,8 @@ def on_message(client, userdata, msg):
         write_queue.put((my_date, imei, msg.topic, payload, crc))
         
     except Exception as e:
-        raise
         logger.error("Error handling MQTT message: %s", str(e))
-        exit(1)
+        
 
 def write_to_database():
     global conn, telit
@@ -152,6 +152,7 @@ def write_to_database():
                         device_type = "swx"
                     
                     cur.execute("INSERT INTO mqtt (timestamp, imei, message, payload, crc, env, topic) VALUES (%s, %s, %s, %s, %s, %s, %s)", (*message,env,topic))
+                    
                     if device_type == "old":
                         cur.execute("SELECT swd_imei FROM things WHERE swd_imei = %s", (message[1],))
                     else:
@@ -179,6 +180,8 @@ def write_to_database():
 
                 except errors.UndefinedColumn as e:
                         conn.rollback()
+                        logger.warning("Column not present: %s", str(e))
+                        logger.info("Creating column: ", topic)
                         sql="ALTER TABLE things ADD COLUMN " + topic + " TEXT;"
                         cur.execute(sql)
                         conn.commit()
@@ -186,18 +189,15 @@ def write_to_database():
                         
                 
                 except Exception as e:
-                    raise
-                    exit(1)
+                    logger.error("Error inserting/updating message in database: %s", str(e))
+                    sys.exit(1)
                     # Handle unique constraint violations separately
                     
             conn.commit()
             
         except Exception as e:
-            
-            # push.send_message("Error writing to database. Retrying...", title="Database Write Error")
             logger.error("Error writing to database: %s", str(e))
-            time.sleep(1)
-            exit(1)
+            sys.exit(1)
             
 def opendatabase():
     global conn
@@ -210,26 +210,29 @@ def opendatabase():
     port = os.environ.get('POSTGRES_PORT')
     
     try:
+        logger.info("Opening database")
         conn = psycopg2.connect(host=host, dbname=dbname, user=user, password=password, port=port)
     except Exception as e:
-            logger.error("Error connecting to database: %s", str(e))
-            # push.send_message("Error connecting to database. Exiting...", title="Database Connection Error")
-            exit(1)
+        logger.critical("Error connecting to database: %s", str(e))
+        exit()
     return conn
 
 
 if __name__ == "__main__":
     
-    logger.info("Starting message queue thread")
-    # Create a separate thread to process messages in the write queue
+    
+    # Open database
     global conn
     conn = opendatabase()
     
+
+    # Create a separate thread to process messages in the write queue
+    logger.info("Starting message queue thread")
     write_thread = threading.Thread(target=write_to_database, daemon=True)
     write_thread.start()
 
     # Connect to the MQTT broker
-    logger.info("Setting up MQTT parameters")
+    logger.info("Setting up MQTT")
     cid = os.environ.get('MQTT_CLIENT_ID') + "-" + str(uuid.uuid4().hex)[:8]
     client = mqtt.Client(client_id=cid, clean_session=True)
     client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
@@ -245,5 +248,5 @@ if __name__ == "__main__":
             client.connect(MQTT_HOST, int(MQTT_PORT), 60)
             client.loop_forever()
         except Exception as e:
-            logger.error("Error connecting to MQTT broker: %s", str(e))
-            exit(1)
+            logger.critical("Error connecting to MQTT broker: %s", str(e))
+            exit()
