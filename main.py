@@ -1,11 +1,13 @@
 import os
 import sys
 import uuid
+import time
 import queue
 import signal
+import logging
 import datetime
 import psycopg2
-import logging
+import requests
 import binascii
 import threading
 import sentry_sdk
@@ -43,6 +45,7 @@ MQTT_USERNAME = os.environ.get("MQTT_USERNAME")
 MQTT_ENV = os.environ.get("MQTT_ENV")
 BETTERSTACK_TOKEN = os.environ.get("BETTERSTACK_TOKEN")
 SENTRY_DSN=os.environ.get("SENTRY_DSN")
+BETTERSTACK_HEARTBEAT_URL=os.environ.get("BETTERSTACK_HEARTBEAT_URL")
 
 # Setup Sentry
 sentry_sdk.init(
@@ -60,7 +63,9 @@ sentry_sdk.init(
 # Create a CRC-32 checksum object
 crc32 = crcmod.predefined.Crc('crc-32')
 
-
+# To keep track of the last heartbeat time. this is used to check if the script has been running for more than 1 minute and send a heartbeat to betterstack. 
+# The check is done only when a MQTT message arrives. Hence, this is to verify MQTT messages are flowing.
+last_heartbeat_time = time.time()
 
 
 handler = LogtailHandler(source_token=BETTERSTACK_TOKEN)
@@ -73,6 +78,32 @@ logger.info("Starting up...")
 
 # Create a queue for messages that need to be written to the database
 write_queue = queue.Queue()
+
+
+def check_and_send_heartbeat():
+    """
+    This function checks if 60 seconds (1 minute) have passed since the last heartbeat.
+    If the time difference is greater than or equal to 60 seconds, it sends a heartbeat to BetterStack.
+
+    Global Variables:
+    last_heartbeat_time (int): The timestamp of the last heartbeat sent to BetterStack.
+
+    Returns:
+    None
+    """
+
+    global last_heartbeat_time
+
+
+    # Get the current time
+    current_time = time.time()
+    
+    # Check if 60 seconds (1 minute) has passed since the last heartbeat
+    if current_time - last_heartbeat_time >= 60:
+        send_heartbeat()
+        # Update the last heartbeat time
+        last_heartbeat_time = current_time
+    
 
 
 def create_crc(data):
@@ -112,6 +143,9 @@ def on_disconnect(client, userdata, rc):
 
 def on_message(client, userdata, msg):
     try:
+        
+        
+        
         # Create CRC from message and topic
         my_date = datetime.datetime.now() 
         
@@ -124,6 +158,8 @@ def on_message(client, userdata, msg):
         # Add message and CRC to write queue if CRC is unique
         write_queue.put((my_date, imei, msg.topic, payload, crc))
         
+       
+        
     except Exception as e:
         logger.error("Error handling MQTT message: %s", str(e))
         
@@ -131,12 +167,18 @@ def on_message(client, userdata, msg):
 def write_to_database():
     global conn, telit
     
+    # Call the function to send the heartbeat
+    
+   
     while True:
         try:
 
                 
             cur = conn.cursor()
             while True:
+                
+                check_and_send_heartbeat()
+
                 try:
                     # Get the next message from the write queue
                     message = write_queue.get(block=False)
@@ -222,14 +264,32 @@ def opendatabase():
     return conn
 
 
+def send_heartbeat():
+    try:
+        # Send a GET request to the heartbeat URL
+        response = requests.get(BETTERSTACK_HEARTBEAT_URL)
+        
+        # Check if the request was successful
+        if response.status_code != 200:
+            logger.info(f"Failed to send heartbeat. Status code: {response.status_code}")
+    
+    except requests.exceptions.RequestException as e:
+        # Handle any exceptions that occur during the request
+        logger.error(f"Heartbeat, an error occurred: {e}")
+
+
+
+
 if __name__ == "__main__":
     
     
     # Open database
     global conn
-    conn = opendatabase()
+
     
 
+    conn = opendatabase()
+    
     # Create a separate thread to process messages in the write queue
     logger.info("Starting message queue thread")
     write_thread = threading.Thread(target=write_to_database, daemon=True)
@@ -243,6 +303,7 @@ if __name__ == "__main__":
     client.on_connect = on_connect
     client.on_message = on_message
     client.on_disconnect = on_disconnect
+    send_heartbeat()
     
     
     
