@@ -271,7 +271,7 @@ def send_heartbeat():
         
         # Check if the request was successful
         if response.status_code != 200:
-            logger.info(f"Failed to send heartbeat. Status code: {response.status_code}")
+            logger.warn(f"Failed to send heartbeat. Status code: {response.status_code}. Will retry.")
     
     except requests.exceptions.RequestException as e:
         # Handle any exceptions that occur during the request
