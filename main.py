@@ -155,16 +155,31 @@ def on_connect(client, userdata, flags, rc):
         
 
 def on_disconnect(client, userdata, rc):
-    if rc != 0:
-        # push.send_message("MQTT connection lost. Reconnecting...", title="MQTT Connection Lost")
-        logger.warning("MQTT connection lost. Reconnecting...")
+    max_retries = 10       # Maximum number of reconnect attempts
+    retry_delay = 5        # Delay between retries in seconds
+    retries = 0
     
-    logger.warning("MQTT disconnected, attempting to reconnect...")
-    try:
-        client.reconnect()
-    except Exception as e:
-        logger.critical("Disconnected, unable to reconnect. Failing. Error message: %s", str(e))
-        exit()
+    if rc != 0:
+        logger.warning("MQTT connection lost. Reconnecting...")
+
+    while retries < max_retries:
+        logger.warning(f"Attempting to reconnect, try {retries + 1} of {max_retries}...")
+        try:
+            client.reconnect()
+            logger.info("Reconnected successfully.")
+            return  # Exit function if reconnected successfully
+        except Exception as e:
+            retries += 1
+            logger.error(f"Reconnect attempt {retries} failed. Error: {str(e)}")
+            if retries < max_retries:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)  # Wait before retrying
+            else:
+                logger.critical("Max reconnect attempts reached. Exiting script.")
+                exit(1)
+
+    logger.critical("Unable to reconnect after multiple attempts. Exiting script.")
+    exit(1)
 
 def on_message(client, userdata, msg):
     try:
