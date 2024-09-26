@@ -213,14 +213,15 @@ def write_to_database():
             cur = conn.cursor()
             while True:
                 
+
                 if DEBUG_MODE != "True":
                     check_and_send_heartbeat()
 
                 try:
                     # Get the next message from the write queue
                     message = write_queue.get(block=False)
-                    if DEBUG_MODE == "True":
-                        logger.info("Processing message: %s", str(message))
+                    # if DEBUG_MODE == "True":
+                    #     print("Processing message: %s", str(message))
 
                 except queue.Empty:
                     break
@@ -244,19 +245,15 @@ def write_to_database():
                     # Check if a row was returned and if the IMEI matches
                     if result and result[0] == message[1]:
                         device_type = "old"
-                    else:
-                        device_type = "swx"
-
+                    
                     if device_type == "":
                         cur.execute("SELECT imei FROM things WHERE imei = %s", (message[1],))
                         # Fetch the result
                         result = cur.fetchone()
                         # Check if a row was returned and if the IMEI matches
                         if result and result[0] == message[1]:
-                            device_type = "old"
-                        else:
                             device_type = "swx"
-                    
+                        
                     
                     if device_type != "":
 
@@ -269,20 +266,20 @@ def write_to_database():
                         if device_type != "" and DEBUG_MODE != "True":
                             cur.execute(q)
                         else:
-                            logger.info(q)
+                            print(q)
 
                     else:
                         strings_to_check = ["connect", "connection", "disconnect", "location", "mqttstats"]
                         if not any(s in topic for s in strings_to_check):
                             if device_type == "old":
-                                q = "INSERT INTO things (swd_imei, " + topic + "," + "lastupdated) VALUES ('" + message[1] +"', '" + message[3] + "', NOW())"
+                                q = "INSERT INTO things (swd_imei, " + topic + "," + "lastupdated, firstseen) VALUES ('" + message[1] +"', '" + message[3] + "', NOW(), NOW())"
                             elif device_type == "swx":
-                                q = "INSERT INTO things (imei, " + topic + "," + "lastupdated) VALUES ('" + message[1] +"', '" + message[3] + "', NOW())"
+                                q = "INSERT INTO things (imei, " + topic + "," + "lastupdated, firstseen) VALUES ('" + message[1] +"', '" + message[3] + "', NOW(), NOW())"
                             
                             if DEBUG_MODE != "True":
                                 cur.execute(q)
                             else:
-                                logger.info(q)
+                                print(q)
 
                 except errors.UndefinedColumn as e:
                         conn.rollback()
@@ -321,22 +318,28 @@ def opendatabase():
     port = os.environ.get('POSTGRES_PORT')
     
     try:
-        logger.info("Opening database")
+        if DEBUG_MODE != "True":
+            logger.info("Opening database")
         conn = psycopg2.connect(host=host, dbname=dbname, user=user, password=password, port=port)
     except Exception as e:
-        logger.critical("Error connecting to database: %s", str(e))
+        if DEBUG_MODE != "True":
+            logger.critical("Error connecting to database: %s", str(e))
         exit()
     return conn
 
 
 def send_heartbeat():
+    
+    if DEBUG_MODE == "True":
+        return
+    
     try:
         # Send a GET request to the heartbeat URL
         response = requests.get(BETTERSTACK_HEARTBEAT_URL)
         
         # Check if the request was successful
         if response.status_code != 200:
-            logger.warn(f"Failed to send heartbeat. Status code: {response.status_code}. Will retry.")
+            logger.warning(f"Failed to send heartbeat. Status code: {response.status_code}. Will retry.")
     
     except requests.exceptions.RequestException as e:
         # Handle any exceptions that occur during the request
@@ -356,7 +359,9 @@ if __name__ == "__main__":
     conn = opendatabase()
     
     # Create a separate thread to process messages in the write queue
-    logger.info("Starting message queue thread")
+    if DEBUG_MODE != "True":
+        logger.info("Starting message queue thread")
+    
     write_thread = threading.Thread(target=write_to_database, daemon=True)
     write_thread.start()
 
@@ -374,9 +379,13 @@ if __name__ == "__main__":
     
     while True:
         try:
-            logger.info("Connecting to MQTT broker")
+            if DEBUG_MODE != "True":
+                logger.info("Connecting to MQTT broker")
+            
             client.connect(MQTT_HOST, int(MQTT_PORT), 60)
             client.loop_forever()
+        
         except Exception as e:
-            logger.critical("Error connecting to MQTT broker: %s", str(e))
+            if DEBUG_MODE != "True":
+                logger.critical("Error connecting to MQTT broker: %s", str(e))
             exit()
