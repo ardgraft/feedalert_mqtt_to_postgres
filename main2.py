@@ -210,6 +210,7 @@ def write_to_database():
     
     logger = logging.getLogger(__name__)
     
+
     try:
         # Open a cursor to perform database operations
         cur = conn.cursor()
@@ -255,6 +256,7 @@ def write_to_database():
 def process_message(cur, message):
     """Process each message and insert/update the database."""
     env = MQTT_ENV
+    check_and_send_heartbeat()
     last_slash_index = message[2].rfind('/')
     topic = message[2][last_slash_index + 1:]
     imei = message[1]
@@ -266,7 +268,13 @@ def process_message(cur, message):
         "VALUES (%s, %s, %s, %s, %s, %s, %s)",
         (*message, env, topic)
     )
-    
+    if cur.rowcount == 1:
+        print("Insert successful")
+    else:
+        print("Insert failed or no rows affected")
+
+    conn.commit()  # Commit to finalize the insert
+
     # Check device type and update information accordingly
     device_type = get_device_type(cur, imei)
 
@@ -346,7 +354,7 @@ def opendatabase():
     try:
         print("Connecting to database...")
         conn = psycopg2.connect(host=host, dbname=dbname, user=user, password=password, port=port)
-        # conn.autocommit = True
+        conn.autocommit = True
         logger.info("Connected to database successfully.")
     except Exception as e:
         
