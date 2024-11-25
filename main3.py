@@ -20,17 +20,7 @@ from dotenv import load_dotenv
 from logtail import LogtailHandler
 
 
-# G1 and C1 TAC data
-g1_tac = [
-    '35681310', '35895016', '35148966', '35334035', '35835646', '35920610', '35224763',
-    '35710485', '35699584', '35612932', '35593998', '35143355', '35604411'
-]
 
-c1_tac = [
-    '35308009', '35807416', '35869708', '35869508', '35773108', '35515408', '35200911',
-    '35871031', '35580321', '35497758', '35634875', '35177519', '35759029', '35515508',
-    '35580810', '35353188', '35580910', '35308109', '35019568', '35912935', '35273076'
-]
 
 # Handle signals for script stop
 def handle_termination_signals(signum, frame):
@@ -185,10 +175,10 @@ def on_disconnect(client, userdata, rc):
                 logger.info(f"Retrying in {retry_delay} seconds...")
                 time.sleep(retry_delay)  # Wait before retrying
             else:
-                logger.critical("Max reconnect attempts reached. Exiting script.")
+                logger.critical(f"Max reconnect attempts reached. Exiting script. Error {e}")
                 exit(1)
 
-    logger.critical("Unable to reconnect after multiple attempts. Exiting script.")
+    logger.critical(f"Unable to reconnect after multiple attempts. Exiting script. ERROR: {e}")
     exit(1)
 
 def on_message(client, userdata, msg):
@@ -209,7 +199,6 @@ def on_message(client, userdata, msg):
     except Exception as e:
         logger.error("Error handling MQTT message: %s", str(e))
         
-
 
 
 def write_to_database():
@@ -243,7 +232,7 @@ def write_to_database():
                 conn.rollback()
                 print("Column not present: %s", str(e))
                 print(f"Creating column: {message[2]}")
-                create_column_if_missing(cur, message[2])
+                # create_column_if_missing(cur, message[2])
             except Exception as e:
                 conn.rollback()
                 print("Error inserting/updating message in database: %s", str(e))
@@ -275,85 +264,17 @@ def process_message(cur, message):
         "VALUES (%s, %s, %s, %s, %s, %s, %s)",
         (*message, env, topic)
     )
+
     if cur.rowcount == 1:
         print("Insert successful")
     else:
         print("Insert failed or no rows affected")
+        logger.critical(f"Error inserting message into database. Exiting script.")
+        exit(1)
 
     conn.commit()  # Commit to finalize the insert
 
-    # Check device type and update information accordingly
-    device_type = get_device_type(imei)
-
-    if device_type:
-        update_device_info(cur, message, topic, device_type)
-    else:
-        insert_new_device(cur, message, topic, device_type)
-
-def get_device_type(imei):
-    tac = imei[:8]  # Extract the first 8 digits (TAC) from the IMEI
-    if tac in g1_tac:
-        return "swx"
-    elif tac in c1_tac:
-        return "old"
-    else:
-        return "Unknown TAC"
-
-def get_device_type_old(cur, imei):
-    """Checks if the device exists and returns its type."""
-    device_type = ""
-
-    # Check if device is 'old'
-    cur.execute("SELECT swd_imei FROM things WHERE swd_imei = %s", (imei,))
-    result = cur.fetchone()
-    if result and result[0] == imei:
-        return "old"
-
-    # Check if device is 'swx'
-    cur.execute("SELECT imei FROM things WHERE imei = %s", (imei,))
-    result = cur.fetchone()
-    if result and result[0] == imei:
-        return "swx"
-
-    return device_type
-
-def update_device_info(cur, message, topic, device_type):
-    """Updates the device information in the database."""
-    imei = message[1]
-    payload = message[3]
-
-    if device_type == "old":
-        query = "UPDATE things SET {} = %s, lastupdated = NOW() WHERE swd_imei = %s".format(topic)
-    else:  # device_type == "swx"
-        query = "UPDATE things SET {} = %s, lastupdated = NOW() WHERE imei = %s".format(topic)
-
-    if DEBUG_MODE != "True":
-        cur.execute(query, (payload, imei))
-    else:
-        print(query)
-
-def insert_new_device(cur, message, topic, device_type):
-    """Inserts a new device into the database."""
-    imei = message[1]
-    payload = message[3]
-    
-    strings_to_check = ["connect", "connection", "disconnect", "location", "mqttstats"]
-    if not any(s in topic for s in strings_to_check):
-        if device_type == "old":
-            query = "INSERT INTO things (swd_imei, {}, lastupdated, firstseen) VALUES (%s, %s, NOW(), NOW())".format(topic)
-        else:  # device_type == "swx"
-            query = "INSERT INTO things (imei, {}, lastupdated, firstseen) VALUES (%s, %s, NOW(), NOW())".format(topic)
-
-            cur.execute(query, (imei, payload))        
-            print(query)
-
-def create_column_if_missing(cur, topic):
-    """Creates a missing column in the 'things' table."""
-    
-    sql = f"ALTER TABLE things ADD COLUMN {topic} TEXT;"
-    cur.execute(sql)
-    conn.commit()
-    print(sql)
+  
 
 
 def opendatabase():
